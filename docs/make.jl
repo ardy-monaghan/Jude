@@ -1,3 +1,3 @@
 using Documenter, Jude
 
-makedocs(sitename="My Documentation")
+makedocs(sitename="My Documentation", remotes = nothing)

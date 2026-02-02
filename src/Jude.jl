@@ -1,5 +1,12 @@
 module Jude
 
-greet() = print("Hello World!")
+export func
+
+"""
+    func(x)
+
+Return double the number `x` plus `1`.
+"""
+func(x) = 2x + 1
 
 end # module Jude
