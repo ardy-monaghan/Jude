@@ -1,4 +1,4 @@
-using Waveforms
+using Waveforms, PortAudio
 
 global const bpm = Ref{Float64}(120.0)
 global const spf = Ref{Int64}(256)
@@ -35,6 +35,8 @@ function query(seq::Sequence, t::Int64)
 
     if mod_t ≥ seq.t₁
         rel_t = mod_t - seq.t₁ + 1
+
+        
         return seq.map(rel_t)
     end
 
@@ -68,6 +70,19 @@ function sound!(sample::Sample, tᵢ::Int64)
 
 end
 
+
+"""
+    _seq(sample, beat, len)
+
+Construct a Sequence starting at `beat` (in beats),
+lasting `len` beats, playing `sample`.
+"""
+_seq(sample, beat, len) =
+    Sequence(1 + beat, len, t -> sound!(sample, t))
+
+
+
+
 y = squarewave.(2π * (440 / fs[]) .* (0:10_000)) .* 0.1
 samp = Sample(y)
 
@@ -77,13 +92,6 @@ seq1 = Sequence(1, 4, t -> sound!(samp, t))
 seq2 = Sequence(1+1/2, 4, t -> sound!(samp, t))
 
 
-macro sayhello(name, trait)
-    if typeof(eval(trait)) <: Tuple
-        return quote println("Hello, ", $name) end
-    else
-        return quote println("Hi, ", $name) end
-    end
-end
 
 """
     @sum seq1 seq2 ...
@@ -93,7 +101,6 @@ Combine sequences by summing their outputs pointwise in time.
 macro sum(seqs...)
     seqs_esc = esc.(seqs)
 
-    # build: t -> seq1(t) + seq2(t) + ...
     body = reduce((a, b) -> :($a + $b),
                   [:( $s(t) ) for s in seqs_esc])
 
@@ -103,43 +110,60 @@ macro sum(seqs...)
 end
 
 """
-    @seq sample beats length
+    @seq sample at=... len=...
 
-Create a Sequence from `sample`.
+Create one or more Sequences from `sample`.
 
-Examples
---------
-@seq samp 0 4
-@seq samp (0, 1) 4
+Examples:
+    @seq samp at=0 len=4
+    @seq samp at=(0, 1/2) len=4
 """
-macro seq(sample, beats, length)
+macro seq(sample, args...)
     sample = esc(sample)
-    length = esc(length)
 
-    # Case 1: single beat offset
-    if !(beats isa Expr && beats.head == :tuple)
-        return quote
-            Sequence(1 + $(esc(beats)), $length,
-                     t -> sound!($sample, t))
+    at_expr  = nothing
+    len_expr = nothing
+
+    # -------------------------
+    # Parse keyword arguments
+    # -------------------------
+    for arg in args
+        if arg isa Expr && arg.head == :(=)
+            key, val = arg.args
+            if key === :at
+                at_expr = val        # DO NOT esc yet
+            elseif key === :len
+                len_expr = esc(val)
+            else
+                error("Unknown keyword `$key` in @seq")
+            end
+        else
+            error("Arguments to @seq must be keyword-style")
         end
     end
 
-    # Case 2: multiple beat offsets (tuple)
-    # Build one Sequence per beat
+    at_expr === nothing  && error("@seq requires `at=`")
+    len_expr === nothing && error("@seq requires `len=`")
+
+    # -------------------------
+    # Case 1: single beat
+    # -------------------------
+    if !(at_expr isa Expr && at_expr.head === :tuple)
+        return :(_seq($sample, $(esc(at_expr)), $len_expr))
+    end
+
+    # -------------------------
+    # Case 2: multiple beats → sum
+    # -------------------------
     seqs = [
-        :(Sequence(1 + $(esc(b)), $length,
-                   t -> sound!($sample, t)))
-        for b in beats.args
+        :(_seq($sample, $(esc(b)), $len_expr))
+        for b in at_expr.args
     ]
 
-    # Delegate summation to @sum
     return Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
 end
 
-@sayhello(
-:Ross,
-(4,)
-)
+
 
 # @seq samp (0, 1/2), 2
 # 
@@ -213,3 +237,36 @@ end
 seq = Sequence(t -> query(Sequence(1, 4, t -> sound!(samp, t)), t) + query(Sequence(1+1/2, 4, t -> sound!(samp, t))
 , t))
 
+##
+
+buf_seq = Ref{Sequence}()
+
+##
+
+buf_seq[] = @seq samp at=(0, 1/2, 2, 2+1/2) len=6
+
+##
+running = Ref(true)
+stream = PortAudioStream(0, 1; samplerate=fs[])
+
+##
+@async begin
+    try
+        tᵢ = 0
+        buf = zeros(Float32, spf[])
+
+        while running[]
+            write(stream,Base.invokelatest(query, buf_seq[], tᵢ))
+            tᵢ += 1
+        end
+
+    catch e
+        @error "Audio task crashed" exception=(e, catch_backtrace())
+    end
+end
+
+
+
+##
+running[] = false
+close(stream)
