@@ -95,7 +95,7 @@ function sound!(buf::Vector{Float32}, sample::Sample, t::Int)
     return nothing
 end
 
-function sound!(buf::Vector{Float32}, wavefunction::Function, note_name::Symbol, note_dur::Float64, t::Int)
+function sound!(buf::Vector{Float32}, wavefunction::Function, note_name::Symbol, note_dur, t::Int)
 
     note_dur_samples = ceil(Int, beats2samples(note_dur))
     start_idx = 1 + (t - 1) * Jude.spf[]
@@ -118,12 +118,15 @@ end
 # ============================================================
 # Internal helpers
 # ============================================================
-
 _seq(sample, beat, len) =
     Sequence(1 + beat, len) do buf, t
         sound!(buf, sample, t)
     end
 
+_seq(wavefunction, note_name, note_dur, beat, len) =
+    Sequence(1 + beat, len) do buf, t
+        sound!(buf, wavefunction, note_name, note_dur, t)
+    end
 
 # ============================================================
 # Buffer initialisation
@@ -133,7 +136,7 @@ buf_seq = Ref{Sequence}()
 # ============================================================
 # Macros
 # ============================================================
-export @setup, @stop, @sum, @seq, @mix
+export @setup, @stop, @sum, @seq, @mix, @synth
 """
     @setup
 
@@ -228,6 +231,101 @@ macro seq(sample, args...)
     seqs = [:(_seq($sample, $(esc(b)), $len_expr)) for b in at_expr.args]
     Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
 end
+
+"""
+Create one or more sequences from a synth signal.
+
+Usage:
+    @synth sin at=(0|a3|2) len=4
+    @synth sin at=(0|a3|2, 2|e3|1) len=4
+"""
+macro synth(wavefn, args...)
+    at  = nothing
+    len = nothing
+
+    for arg in args
+        if arg isa Expr && arg.head === :(=)
+            if arg.args[1] === :at
+                at = arg.args[2]
+            elseif arg.args[1] === :len
+                len = arg.args[2]
+            end
+        end
+    end
+
+    at === nothing  && error("@synth requires at=...")
+    len === nothing && error("@synth requires len=...")
+
+    entries =
+        at isa Expr && at.head === :tuple ? at.args :
+        (at,)
+
+    seqs = map(entries) do ex
+        # expect offset | note | dur
+        ex isa Expr && ex.head === :call && ex.args[1] === :| ||
+            error("@synth expects offset|note|dur")
+
+        left, dur = ex.args[2], ex.args[3]
+
+        left isa Expr && left.head === :call && left.args[1] === :| ||
+            error("@synth expects offset|note|dur")
+
+        offset, note = left.args[2], left.args[3]
+
+        :(_seq(
+            $(esc(wavefn)),
+            $(esc(note)),
+            $(esc(dur)),
+            $(esc(offset)),
+            $(esc(len))
+        ))
+    end
+
+    if length(seqs) == 1
+        return seqs[1]
+    else
+        return Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
+    end
+end
+
+# macro synth(wavefunction, args...)
+
+#     function parse_synth_atom(ex)
+#         ex isa Expr && ex.head === :call && ex.args[1] === :| ||
+#             error("@synth expects entries of the form offset|note|dur")
+
+#         left, dur = ex.args[2], ex.args[3]
+
+#         left isa Expr && left.head === :call && left.args[1] === :| ||
+#             error("@synth expects offset|note|dur")
+
+#         offset, note = left.args[2], left.args[3]
+
+#         return offset, note, dur
+#     end
+
+#     wavefunction = esc(wavefunction)
+#     at_expr  = nothing
+#     len_expr = nothing
+
+#     for arg in args
+#         if arg isa Expr && arg.head === :(=)
+#             k, v = arg.args
+#             k === :at  && (at_expr  = v)
+#             k === :len && (len_expr = esc(v))
+#         end
+#     end
+
+#     at_expr === nothing  && error("@seq requires at=")
+#     len_expr === nothing && error("@seq requires len=")
+
+#     if !(at_expr isa Expr && at_expr.head === :tuple)
+#         return :(_seq($wavefunction, $(esc(at_expr)), $len_expr))
+#     end
+
+#     seqs = [:(_seq($wavefunction, $(esc(b)), $len_expr)) for b in at_expr.args]
+#     Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
+# end
 
 
 """

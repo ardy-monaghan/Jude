@@ -31,8 +31,14 @@ s1 = @seq samp_x at=(0, 2) len=4
 s2 = @seq samp_y at=(1, 3) len=4
 s3 = @seq samp_z at=(0, 1, 2, 3) len=4
 
+s4 = @synth sin at=(0|:a3|2, 0|:e3|1, 2+1/2|:e3|1/2) len=4
+
+
 ##
-@mix synth_test
+@mix(
+    (@synth sin at=(0|:a3|2, 0|:e3|1, 2+1/2|:e3|1/2) len=4),
+    (@synth sawtoothwave at=(0|:a3|1/4) len=1)
+)
 
 ##
 @mix @seq samp_x at=(0, 2) len=4
