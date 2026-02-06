@@ -97,10 +97,16 @@ _seq(sample, beat, len) =
     end
 
 
+
+# ============================================================
+# Buffer initialisation
+# ============================================================
+buf_seq = Ref{Sequence}()
+
 # ============================================================
 # Macros
 # ============================================================
-export @setup, @stop, @sum
+export @setup, @stop, @sum, @seq, @mix
 """
     @setup
 
@@ -123,6 +129,23 @@ macro setup(args...)
 
         # Mark running as true
         Jude.running[] = true
+
+        # Buffer variables
+        buf = zeros(Float32, Jude.spf[])
+        Jude.buf_seq[] = Sequence() do buf, t
+            fill!(buf, 0.0f0)
+        end
+
+        @async begin
+            t = 0
+            while Jude.running[]
+                fill!(buf, 0f0)
+                Base.invokelatest(query!, buf, Jude.buf_seq[], t)
+                write(Jude.stream, buf)
+                t += 1
+            end
+        end
+
     end
 end
 
@@ -144,6 +167,51 @@ macro sum(seqs...)
         Sequence() do buf, t
             $(Expr(:block, calls...))
         end
+    end
+end
+
+"""
+Create one or more sequences from a sample.
+
+Usage:
+    @seq samp at=0 len=4
+    @seq samp at=(0, 1/2) len=4
+"""
+macro seq(sample, args...)
+    sample = esc(sample)
+    at_expr  = nothing
+    len_expr = nothing
+
+    for arg in args
+        if arg isa Expr && arg.head === :(=)
+            k, v = arg.args
+            k === :at  && (at_expr  = v)
+            k === :len && (len_expr = esc(v))
+        end
+    end
+
+    at_expr === nothing  && error("@seq requires at=")
+    len_expr === nothing && error("@seq requires len=")
+
+    if !(at_expr isa Expr && at_expr.head === :tuple)
+        return :(_seq($sample, $(esc(at_expr)), $len_expr))
+    end
+
+    seqs = [:(_seq($sample, $(esc(b)), $len_expr)) for b in at_expr.args]
+    Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
+end
+
+"""
+Assign sequences to buf_seq[] (live sequence).
+
+- Single sequence: assigned directly
+- Multiple: summed with @sum
+"""
+macro mix(seqs...)
+    if length(seqs) == 1
+        :(Jude.buf_seq[] = $(esc(seqs[1])));
+    else
+        :(Jude.buf_seq[] = @sum $(esc.(seqs)...));
     end
 end
 
