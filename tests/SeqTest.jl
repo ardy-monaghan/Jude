@@ -50,7 +50,7 @@ struct Sample
     T::Int64
 end
 
-function Sample(data::Union{Vector{Float32}, Vector{Float64}})
+function Sample(data::Vector{Float32})
     return Sample(data, ceil(Int64, length(data) / spf[]))
 end
 
@@ -154,6 +154,55 @@ macro seq(sample, args...)
     return Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
 end
 
+"""
+    @jude seq1 [seq2 seq3 ...]
+
+Assign sequences to `buf_seq[]`.
+
+- Single argument: assigns directly
+- Multiple arguments: assigns the sum via @sum
+"""
+macro jude(seqs...)
+    if length(seqs) == 1
+        return quote
+            buf_seq[] = $(esc(seqs[1]))
+        end
+    else
+        return quote
+            buf_seq[] = @sum $(esc.(seqs)...)
+        end
+    end
+end
+
+
+"""
+    @setup
+
+Import core packages and define global audio parameters.
+"""
+macro setup()
+    quote
+        using Waveforms, PortAudio, Jude
+
+        global const bpm = Ref{Float64}(120.0)
+        global const spf = Ref{Int64}(256)
+        global const fs  = Ref{Int64}(44100)
+
+        global running = Ref(true)
+        global stream = PortAudioStream(0, 1; samplerate=fs[])
+
+        global buf_seq = Ref{Sequence}()
+        buf_seq[] = Sequence(t -> zeros(Float32, spf[]))
+
+        @async begin
+            tᵢ = 0
+            while running[]
+                write(stream,Base.invokelatest(query, buf_seq[], tᵢ))
+                tᵢ += 1
+            end
+        end
+    end
+end
 
 
 # @seq samp (0, 1/2), 2
@@ -234,7 +283,7 @@ buf_seq = Ref{Sequence}()
 
 ##
 
-buf_seq[] = @seq samp at=(0, 1/2, 2, 2+1/2) len=6
+@jude @seq samp at=(0, 1/3, 2/3) len=4
 
 ##
 running = Ref(true)
@@ -242,17 +291,10 @@ stream = PortAudioStream(0, 1; samplerate=fs[])
 
 ##
 @async begin
-    try
-        tᵢ = 0
-        buf = zeros(Float32, spf[])
-
-        while running[]
-            write(stream,Base.invokelatest(query, buf_seq[], tᵢ))
-            tᵢ += 1
-        end
-
-    catch e
-        @error "Audio task crashed" exception=(e, catch_backtrace())
+    tᵢ = 0
+    while running[]
+        write(stream,Base.invokelatest(query, buf_seq[], tᵢ))
+        tᵢ += 1
     end
 end
 
