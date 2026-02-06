@@ -12,15 +12,23 @@ global stream::PortAudioStream
 # ============================================================
 # Utilities
 # ============================================================
-export beats2samples
+export beats2frames, beats2samples
 
 """
 Convert a number of beats to the number of frames (audio buffer time).
 """
-function beats2samples(beats)
+function beats2frames(beats)
     floor(beats * (60 / Jude.bpm[]) * Jude.fs[] / Jude.spf[])
 end
 
+"""
+Convert a number of beats to the number of samples 
+"""
+function beats2samples(beats)
+    floor(beats * (60 / Jude.bpm[]) * Jude.fs[])
+end
+
+nt = Dict([(:a3=>440.0), (:e3=>660.0)])
 
 # ============================================================
 # Sequence abstraction
@@ -41,8 +49,8 @@ struct Sequence <: AbstractSequence
 
     function Sequence(map::Function, t₁_beats, T_beats)
 
-        t₁ = beats2samples(t₁_beats-1) + 1
-        T = beats2samples(T_beats)
+        t₁ = beats2frames(t₁_beats-1) + 1
+        T = beats2frames(T_beats)
 
         new(t₁, T, map)
     end
@@ -87,6 +95,26 @@ function sound!(buf::Vector{Float32}, sample::Sample, t::Int)
     return nothing
 end
 
+function sound!(buf::Vector{Float32}, wavefunction::Function, note_name::Symbol, note_dur::Float64, t::Int)
+
+    note_dur_samples = ceil(Int, beats2samples(note_dur))
+    start_idx = 1 + (t - 1) * Jude.spf[]
+    end_idx   = min(t * Jude.spf[], note_dur_samples)
+    start_idx > note_dur_samples && return nothing
+
+    for (i, tᵢ) in enumerate(start_idx:end_idx)
+        buf[i] += 0.1 * wavefunction(2π * (Jude.nt[note_name] / Jude.fs[]) .* (tᵢ-1))
+    end
+    return nothing
+end
+
+# ============================================================
+# Synth generation playback
+# ============================================================
+
+
+
+
 # ============================================================
 # Internal helpers
 # ============================================================
@@ -95,7 +123,6 @@ _seq(sample, beat, len) =
     Sequence(1 + beat, len) do buf, t
         sound!(buf, sample, t)
     end
-
 
 
 # ============================================================
@@ -170,6 +197,7 @@ macro sum(seqs...)
     end
 end
 
+
 """
 Create one or more sequences from a sample.
 
@@ -201,17 +229,25 @@ macro seq(sample, args...)
     Expr(:macrocall, Symbol("@sum"), __source__, seqs...)
 end
 
+
 """
 Assign sequences to buf_seq[] (live sequence).
 
 - Single sequence: assigned directly
 - Multiple: summed with @sum
 """
-macro mix(seqs...)
-    if length(seqs) == 1
-        :(Jude.buf_seq[] = $(esc(seqs[1])));
+macro mix(args...)
+    # If called as @mix(a, b, c) → args = (:(a, b, c),)
+    if length(args) == 1 && args[1] isa Expr && args[1].head === :tuple
+        args = args[1].args
+    end
+
+
+    if length(args) == 1
+        return :(Jude.buf_seq[] = $(esc(args[1])))
     else
-        :(Jude.buf_seq[] = @sum $(esc.(seqs)...));
+        return :(Jude.buf_seq[] =
+            $(Expr(:macrocall, Symbol("@sum"), __source__, esc.(args)...)))
     end
 end
 
