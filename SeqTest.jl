@@ -81,17 +81,8 @@ _seq(sample, beat, len) =
     Sequence(1 + beat, len, t -> sound!(sample, t))
 
 
-
-
 y = squarewave.(2π * (440 / fs[]) .* (0:10_000)) .* 0.1
 samp = Sample(y)
-
-seq = Sequence(1, 1/4, t -> sound!(samp, t))
-
-seq1 = Sequence(1, 4, t -> sound!(samp, t))
-seq2 = Sequence(1+1/2, 4, t -> sound!(samp, t))
-
-
 
 """
     @sum seq1 seq2 ...
@@ -131,7 +122,7 @@ macro seq(sample, args...)
         if arg isa Expr && arg.head == :(=)
             key, val = arg.args
             if key === :at
-                at_expr = val        # DO NOT esc yet
+                at_expr = val        
             elseif key === :len
                 len_expr = esc(val)
             else
